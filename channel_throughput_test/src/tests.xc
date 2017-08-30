@@ -57,14 +57,14 @@ void data_array_recv_via_interface(int recv_data[ARRAY_SIZE], client interface i
     iface.xfer_array(recv_data);
 }
 
-void data_send_via_interface(data_t *send_data, server interface intertile_xfer_if iface, int tile, timer tmr)
+void data_send_via_interface(data_t &send_data, server interface intertile_xfer_if iface, int tile, timer tmr)
 {
     uint32_t t1, t2;
 
     tmr :> t1;
     select {
         case iface.xfer_struct(data_t &data):
-            data = *send_data;
+            data = send_data;
             break;
         case iface.xfer_array(int array[ARRAY_SIZE]):
             printf("bad\n");
@@ -76,17 +76,17 @@ void data_send_via_interface(data_t *send_data, server interface intertile_xfer_
     print_elapsed_time(t1, t2);
 }
 
-void data_recv_via_interface(data_t *recv_data, client interface intertile_xfer_if iface)
+void data_recv_via_interface(data_t &recv_data, client interface intertile_xfer_if iface)
 {
-    iface.xfer_struct(*recv_data);
+    iface.xfer_struct(recv_data);
 }
 
-void data_send_via_channel(data_t *send_data, chanend channel, int tile, timer tmr)
+void data_send_via_channel(data_t &send_data, chanend channel, int tile, timer tmr)
 {
     uint32_t t1, t2;
 
     tmr :> t1;
-    channel <: *send_data;
+    channel <: send_data;
     tmr :> t2;
 
     printf("%u bytes sent over a channel to tile %d in ", sizeof(data_t), tile);
@@ -94,17 +94,17 @@ void data_send_via_channel(data_t *send_data, chanend channel, int tile, timer t
 }
 
 
-void data_recv_via_channel(data_t *recv_data, chanend channel)
+void data_recv_via_channel(data_t &recv_data, chanend channel)
 {
-    channel :> *recv_data;
+    channel :> recv_data;
 }
 
-void data_send_via_streaming_channel(data_t *send_data, streaming chanend channel, int tile, timer tmr)
+void data_send_via_streaming_channel(data_t &send_data, streaming chanend channel, int tile, timer tmr)
 {
     uint32_t t1, t2;
 
     tmr :> t1;
-    channel <: *send_data;
+    channel <: send_data;
     tmr :> t2;
 
     printf("%u bytes sent over a streaming channel to tile %d in ", sizeof(data_t), tile);
@@ -112,9 +112,9 @@ void data_send_via_streaming_channel(data_t *send_data, streaming chanend channe
 }
 
 
-void data_recv_via_streaming_channel(data_t *recv_data, streaming chanend channel)
+void data_recv_via_streaming_channel(data_t &recv_data, streaming chanend channel)
 {
-    channel :> *recv_data;
+    channel :> recv_data;
 }
 
 void data_sender_task(server interface intertile_xfer_if iface[2], chanend channel[2], streaming chanend streaming_channel[2])
@@ -130,23 +130,23 @@ void data_sender_task(server interface intertile_xfer_if iface[2], chanend chann
 
     for (i = 0; i < TEST_REPEAT_COUNT; i++) {
         delay_milliseconds(500);
-        data_send_via_interface(&send_data, iface[0], 1, tmr);
+        data_send_via_interface(send_data, iface[0], 1, tmr);
         delay_milliseconds(500);
         data_array_send_via_interface(send_data.array, iface[0], 1, tmr);
         delay_milliseconds(500);
-        data_send_via_channel(&send_data, channel[0], 1, tmr);
+        data_send_via_channel(send_data, channel[0], 1, tmr);
         delay_milliseconds(500);
-        data_send_via_streaming_channel(&send_data, streaming_channel[0], 1, tmr);
+        data_send_via_streaming_channel(send_data, streaming_channel[0], 1, tmr);
         printf("\n");
 
         delay_milliseconds(500);
-        data_send_via_interface(&send_data, iface[1], 2, tmr);
+        data_send_via_interface(send_data, iface[1], 2, tmr);
         delay_milliseconds(500);
         data_array_send_via_interface(send_data.array, iface[1], 2, tmr);
         delay_milliseconds(500);
-        data_send_via_channel(&send_data, channel[1], 2, tmr);
+        data_send_via_channel(send_data, channel[1], 2, tmr);
         delay_milliseconds(500);
-        data_send_via_streaming_channel(&send_data, streaming_channel[1], 2, tmr);
+        data_send_via_streaming_channel(send_data, streaming_channel[1], 2, tmr);
         printf("\n");
     }
 
@@ -158,10 +158,10 @@ void data_receiver_task(client interface intertile_xfer_if iface, chanend channe
     data_t recv_data;
 
     for (i = 0; i < TEST_REPEAT_COUNT; i++) {
-        data_recv_via_interface(&recv_data, iface);
+        data_recv_via_interface(recv_data, iface);
         data_array_recv_via_interface(recv_data.array, iface);
-        data_recv_via_channel(&recv_data, channel);
-        data_recv_via_streaming_channel(&recv_data, streaming_channel);
+        data_recv_via_channel(recv_data, channel);
+        data_recv_via_streaming_channel(recv_data, streaming_channel);
     }
 }
 
