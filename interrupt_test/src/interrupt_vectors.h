@@ -11,8 +11,7 @@
 
 enum {
     ISR1,
-    //ISR2,
-    //ISR3,
+    ISR2,
     ISR_COUNT
 };
 

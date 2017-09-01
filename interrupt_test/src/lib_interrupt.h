@@ -9,16 +9,22 @@
 #ifndef ISRS_H_
 #define ISRS_H_
 
+#include <stdint.h>
 #include "xccompat.h"
+
+#define ISR_STACK_MIN_SIZE 14
 
 typedef struct {
     unsigned channel_id;
 #ifdef __XC__
     void * unsafe func_ptr;
     void * unsafe user_ptr;
+    uint32_t * unsafe stack;
 #else
+    __attribute__((fptrgroup("isr_group")))
     void (*func_ptr)(chanend channel, void *user_ptr);
     void *user_ptr;
+    uint32_t *stack;
 #endif
 } isr_data_t;
 

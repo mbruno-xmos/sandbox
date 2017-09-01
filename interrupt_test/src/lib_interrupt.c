@@ -6,22 +6,12 @@
  */
 
 #include <stdio.h>
+#include <stdint.h>
 
 #include "lib_interrupt.h"
 
-static void generic_isr(void)
-{
-    isr_data_t *isr_data;
-
-    //printf("in isr\n");
-
-    /* get the environment vector which holds the isr_data struct */
-    asm("get r11, ed\n mov %0, r11" : "=r"(isr_data) : : "r11");
-
-    isr_data->func_ptr(isr_data->channel_id, isr_data->user_ptr);
-
-    asm("kret");
-}
+/* generic_isr is found in lib_interrupt.S */
+void generic_isr(void);
 
 void interrupt_enable_channel(chanend channel_id, void *func_ptr, void *user_ptr, REFERENCE_PARAM(isr_data_t, isr_data))
 {
@@ -44,6 +34,4 @@ void interrupt_enable_channel(chanend channel_id, void *func_ptr, void *user_ptr
           "r"(generic_isr)       /* generic_isr is input 2 */
         : "r11"                  /* clobbers r11 */
     );
-
-    //printf("setting ISR, channel id is %08X\n", channel);
 }
