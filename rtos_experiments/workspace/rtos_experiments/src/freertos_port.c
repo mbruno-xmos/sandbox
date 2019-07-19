@@ -9,6 +9,7 @@
 
 #include "freertos_port.h"
 
+#include "xassert.h"
 #include "xcore_c.h"
 #include "debug_print.h"
 
@@ -21,23 +22,27 @@ static volatile int xcore_thread_init_count;
 
 DEFINE_INTERRUPT_CALLBACK(freertos_isr, freertos_xcore_thread_isr, data)
 {
-    unsigned int core_id;
-    uint8_t other_core_id;
-    core_id = get_logical_core_id();
+    int core_id;
+    int other_core_id;
+    core_id = (int) get_logical_core_id();
 
-    other_core_id = _s_chan_in_byte(core_interrupt_chan[core_id]);
+    other_core_id = (int) _s_chan_in_byte(core_interrupt_chan[core_id]);
     _s_chan_check_ct_end(core_interrupt_chan[core_id]);
 
-    debug_printf("Core %u interrupted by core %u\n", core_id, other_core_id);
+    debug_printf("Core %d interrupted by core %d\n", core_id, other_core_id);
 }
 
-void freertos_xcore_thread_interrupt(uint32_t core_id)
+void freertos_xcore_thread_interrupt(int core_id)
 {
-    unsigned int this_core_id;
+    int this_core_id;
 
     interrupt_mask_all();
     /*** BEGIN CRITICAL SECTION ***/
-    this_core_id = get_logical_core_id();
+    /*
+     * It is important that this runs atomically
+     * and is not preempted in the middle.
+     */
+    this_core_id = (int) get_logical_core_id();
     chanend_set_dest(core_interrupt_chan[this_core_id], core_interrupt_chan[core_id]);
     _s_chan_out_byte(core_interrupt_chan[this_core_id], this_core_id);
     _s_chan_out_ct_end(core_interrupt_chan[this_core_id]);
@@ -62,11 +67,11 @@ void freertos_xcore_thread_interrupt(uint32_t core_id)
  * that it's possible for any thread to interrupt any other thread.
  */
 
-unsigned int freertos_xcore_thread_init(int xcore_thread_count)
+int freertos_xcore_thread_init(int xcore_thread_count)
 {
-    unsigned int core_id;
+    int core_id;
 
-    core_id = get_logical_core_id();
+    core_id = (int) get_logical_core_id();
 
     if (core_id == 0) {
         lock_alloc(&freertos_kernel_lock);
@@ -97,16 +102,18 @@ unsigned int freertos_xcore_thread_init(int xcore_thread_count)
     return core_id;
 }
 
-DEFINE_INTERRUPT_PERMITTED(freertos_isr, void, freertos_xcore_thread_kernel_enter, void)
+DEFINE_INTERRUPT_PERMITTED(freertos_isr, void, freertos_xcore_thread_kernel_enter, int xcore_thread_count)
 {
-    unsigned int core_id;
+    int core_id;
 
-    core_id = freertos_xcore_thread_init(8);
+    xassert(xcore_thread_count <= CORE_COUNT_MAX);
 
-    debug_printf("Thread %u initialized\n", core_id);
+    core_id = freertos_xcore_thread_init(xcore_thread_count);
+
+    debug_printf("Thread %d initialized\n", core_id);
 
     core_id++;
-    if (core_id == 8) {
+    if (core_id == xcore_thread_count) {
         core_id = 0;
     }
     freertos_xcore_thread_interrupt(core_id);

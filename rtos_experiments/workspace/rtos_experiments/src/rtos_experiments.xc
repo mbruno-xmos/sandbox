@@ -11,6 +11,8 @@
 #include "freertos_port.h"
 #include "debug_print.h"
 
+#define FREERTOS_CORE_COUNT 3
+
 void task_print_self(chanend ?c)
 {
     unsigned int core_id;
@@ -45,11 +47,8 @@ int main()
 //        on tile[1]: spawn_print_self(c1, c2);
 //        on tile[2]: spawn_print_self(c3, c4);
 //        on tile[3]: spawn_print_self(c3, c4);
-        on tile[0]: {
-            par (int i = 0; i < 8; i++) {
-                INTERRUPT_PERMITTED(freertos_xcore_thread_kernel_enter)();
-            }
-        }
+
+        on tile[0]: freertos_xcore_kernel_enter(FREERTOS_CORE_COUNT);
     }
 
     return 0;
