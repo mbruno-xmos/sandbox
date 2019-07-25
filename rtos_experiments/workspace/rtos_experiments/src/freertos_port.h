@@ -9,7 +9,11 @@
 #ifndef FREERTOS_PORT_H_
 #define FREERTOS_PORT_H_
 
+#ifndef __ASSEMBLER__
 #include "xcore_c.h"
+#endif
+
+#define FREERTOS_XCORE_THREAD_CONTEXT_WORDSIZE 19
 
 #if defined(__XC__)
 

@@ -8,6 +8,7 @@
 #include <xs1.h>
 
 #include "freertos_port.h"
+#include "freertos_interrupt.h"
 
 #include "xassert.h"
 #include "xcore_c.h"
@@ -20,16 +21,73 @@ static chanend core_interrupt_chan[CORE_COUNT_MAX];
 static lock_t freertos_kernel_lock;
 static volatile int xcore_thread_init_count;
 
-DEFINE_INTERRUPT_CALLBACK(freertos_isr, freertos_xcore_thread_isr, data)
+static volatile uint32_t *thread_sp[CORE_COUNT_MAX];
+static volatile int in_isr_count;
+static volatile int out_isr_count;
+
+void freertos_xcore_thread_interrupt_from_isr(int core_id)
+{
+    int this_core_id;
+
+    this_core_id = (int) get_logical_core_id();
+    chanend_set_dest(core_interrupt_chan[this_core_id], core_interrupt_chan[core_id]);
+    _s_chan_out_byte(core_interrupt_chan[this_core_id], this_core_id);
+    _s_chan_out_ct_end(core_interrupt_chan[this_core_id]);
+}
+
+_DEFINE_FREERTOS_INTERRUPT_CALLBACK(freertos_isr, freertos_xcore_thread_isr, data, sp)
 {
     int core_id;
     int other_core_id;
+    int next_core_id;
     core_id = (int) get_logical_core_id();
+
+    if (core_id == 0) {
+        for (int i = 0; i < 3; i++) {
+            if (i != core_id) {
+                freertos_xcore_thread_interrupt_from_isr(i);
+            }
+        }
+    }
+
+    lock_acquire(freertos_kernel_lock);
+    thread_sp[core_id] = sp;
+    in_isr_count++;
+    lock_release(freertos_kernel_lock);
 
     other_core_id = (int) _s_chan_in_byte(core_interrupt_chan[core_id]);
     _s_chan_check_ct_end(core_interrupt_chan[core_id]);
 
+    lock_acquire(freertos_kernel_lock);
     debug_printf("Core %d interrupted by core %d\n", core_id, other_core_id);
+    lock_release(freertos_kernel_lock);
+
+    next_core_id = core_id + 1;
+    if (next_core_id == 3) {
+        next_core_id = 0;
+    }
+
+    while (in_isr_count < 3);// debug_printf("isr on %d, c=%d\n", core_id, in_isr_count);
+    lock_acquire(freertos_kernel_lock);
+    //debug_printf("%d\n", in_isr_count);
+    sp = (void *) thread_sp[next_core_id];
+    out_isr_count++;
+    lock_release(freertos_kernel_lock);
+    while (out_isr_count < 3);
+//    lock_acquire(freertos_kernel_lock);
+//    debug_printf("%d\n", out_isr_count);
+//    lock_release(freertos_kernel_lock);
+    if (core_id == 0) {
+        while (in_isr_count > 1);
+        out_isr_count = 0;
+    }
+    in_isr_count--;
+
+#if 1
+    return sp;
+#else
+    return (void *) thread_sp[core_id];
+#endif
 }
 
 void freertos_xcore_thread_interrupt(int core_id)
@@ -51,7 +109,7 @@ void freertos_xcore_thread_interrupt(int core_id)
 }
 
 /*
- * Spawn CORE_COUNT (up to 8) tasks within a single tile.
+ * Spawn xcore_thread_count (up to CORE_COUNT_MAX) tasks within a single tile.
  *
  * Each allocates a channel end with GETR and assigns
  * its identifier to core_interrupt_chan[get_logical_core_id()].
@@ -102,21 +160,44 @@ int freertos_xcore_thread_init(int xcore_thread_count)
     return core_id;
 }
 
-DEFINE_INTERRUPT_PERMITTED(freertos_isr, void, freertos_xcore_thread_kernel_enter, int xcore_thread_count)
+_DEFINE_FREERTOS_INTERRUPT_PERMITTED(freertos_isr, void, freertos_xcore_thread_kernel_enter, int xcore_thread_count)
 {
-    int core_id;
+    int thread_id;
 
     xassert(xcore_thread_count <= CORE_COUNT_MAX);
 
-    core_id = freertos_xcore_thread_init(xcore_thread_count);
+    thread_id = freertos_xcore_thread_init(xcore_thread_count);
 
-    debug_printf("Thread %d initialized\n", core_id);
+    debug_printf("Thread %d initialized\n", thread_id);
 
-    core_id++;
-    if (core_id == xcore_thread_count) {
-        core_id = 0;
+    for (int i = 0; i < 10; i++) {
+
+        int core_id;
+        int core_to_interrupt;
+
+        interrupt_mask_all();
+        core_id = get_logical_core_id();
+        core_to_interrupt = core_id + 1;
+        if (core_to_interrupt == xcore_thread_count) {
+            core_to_interrupt = 0;
+        }
+
+        if (core_to_interrupt == 0) {
+
+            debug_printf("Thread %d on core %d interrupting core %d\n", thread_id, core_id, core_to_interrupt);
+
+
+            freertos_xcore_thread_interrupt(core_to_interrupt);
+            interrupt_unmask_all();
+        } else {
+            debug_printf("Thread %d on core %d\n", thread_id, core_id);
+            interrupt_unmask_all();
+        }
     }
-    freertos_xcore_thread_interrupt(core_id);
+
+    interrupt_mask_all();
+    debug_printf("Thread %d done at core %d\n", thread_id, get_logical_core_id());
+    interrupt_unmask_all();
 
     for (;;);
 }
