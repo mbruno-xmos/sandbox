@@ -25,7 +25,6 @@ static volatile int xcore_thread_init_count;
 
 static volatile uint32_t *thread_sp[CORE_COUNT_MAX];
 static volatile int in_isr_count;
-static volatile int out_isr_count;
 
 static volatile uint32_t freertos_tick;
 
@@ -59,8 +58,9 @@ _DEFINE_FREERTOS_INTERRUPT_CALLBACK(freertos_isr, freertos_xcore_thread_isr, dat
     int next_core_id;
     core_id = (int) get_logical_core_id();
 
-    lock_acquire(freertos_kernel_lock);
     thread_sp[core_id] = sp;
+
+    lock_acquire(freertos_kernel_lock);
     in_isr_count++;
     lock_release(freertos_kernel_lock);
 
@@ -73,16 +73,8 @@ _DEFINE_FREERTOS_INTERRUPT_CALLBACK(freertos_isr, freertos_xcore_thread_isr, dat
     }
 
     while (in_isr_count < 3);
-    lock_acquire(freertos_kernel_lock);
+
     sp = (void *) thread_sp[next_core_id];
-    out_isr_count++;
-    lock_release(freertos_kernel_lock);
-    while (out_isr_count < 3);
-    if (core_id == 0) {
-        while (in_isr_count > 1);
-        out_isr_count = 0;
-    }
-    in_isr_count--;
 
 #if 1
     return sp;
@@ -115,6 +107,7 @@ _DEFINE_FREERTOS_INTERRUPT_CALLBACK(freertos_isr, freertos_xcore_timer_isr, data
 
     if (freertos_tick % 100 == 0) {
         debug_printf("%d\n", freertos_tick);
+        in_isr_count = 0;
         for (int i = 0; i < 3; i++) {
             freertos_xcore_thread_interrupt_from_isr(i);
         }
@@ -218,9 +211,7 @@ _DEFINE_FREERTOS_INTERRUPT_PERMITTED(freertos_isr, void, freertos_xcore_thread_k
         while ((freertos_tick - t1) < 50);
     }
 
-    interrupt_mask_all();
     debug_printf("Thread %d done at core %d\n", thread_id, get_logical_core_id());
-    interrupt_unmask_all();
 
     for (;;);
 }
