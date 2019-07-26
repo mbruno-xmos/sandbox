@@ -6,6 +6,7 @@
  */
 
 #include <xs1.h>
+#include <timer.h>
 
 #include "freertos_port.h"
 #include "freertos_interrupt.h"
@@ -18,12 +19,15 @@
 
 static chanend core_interrupt_chan[CORE_COUNT_MAX];
 
+static hwtimer_t freertos_kernel_timer;
 static lock_t freertos_kernel_lock;
 static volatile int xcore_thread_init_count;
 
 static volatile uint32_t *thread_sp[CORE_COUNT_MAX];
 static volatile int in_isr_count;
 static volatile int out_isr_count;
+
+static volatile uint32_t freertos_tick;
 
 void freertos_xcore_thread_interrupt_from_isr(int core_id)
 {
@@ -35,20 +39,25 @@ void freertos_xcore_thread_interrupt_from_isr(int core_id)
     _s_chan_out_ct_end(core_interrupt_chan[this_core_id]);
 }
 
+void freertos_xcore_thread_interrupt(int core_id)
+{
+    interrupt_mask_all();
+    /*** BEGIN CRITICAL SECTION ***/
+    /*
+     * It is important that this runs atomically
+     * and is not preempted in the middle.
+     */
+    freertos_xcore_thread_interrupt_from_isr(core_id);
+    /*** END CRITICAL SECTION ***/
+    interrupt_unmask_all();
+}
+
 _DEFINE_FREERTOS_INTERRUPT_CALLBACK(freertos_isr, freertos_xcore_thread_isr, data, sp)
 {
     int core_id;
     int other_core_id;
     int next_core_id;
     core_id = (int) get_logical_core_id();
-
-    if (core_id == 0) {
-        for (int i = 0; i < 3; i++) {
-            if (i != core_id) {
-                freertos_xcore_thread_interrupt_from_isr(i);
-            }
-        }
-    }
 
     lock_acquire(freertos_kernel_lock);
     thread_sp[core_id] = sp;
@@ -58,25 +67,17 @@ _DEFINE_FREERTOS_INTERRUPT_CALLBACK(freertos_isr, freertos_xcore_thread_isr, dat
     other_core_id = (int) _s_chan_in_byte(core_interrupt_chan[core_id]);
     _s_chan_check_ct_end(core_interrupt_chan[core_id]);
 
-    lock_acquire(freertos_kernel_lock);
-    debug_printf("Core %d interrupted by core %d\n", core_id, other_core_id);
-    lock_release(freertos_kernel_lock);
-
     next_core_id = core_id + 1;
     if (next_core_id == 3) {
         next_core_id = 0;
     }
 
-    while (in_isr_count < 3);// debug_printf("isr on %d, c=%d\n", core_id, in_isr_count);
+    while (in_isr_count < 3);
     lock_acquire(freertos_kernel_lock);
-    //debug_printf("%d\n", in_isr_count);
     sp = (void *) thread_sp[next_core_id];
     out_isr_count++;
     lock_release(freertos_kernel_lock);
     while (out_isr_count < 3);
-//    lock_acquire(freertos_kernel_lock);
-//    debug_printf("%d\n", out_isr_count);
-//    lock_release(freertos_kernel_lock);
     if (core_id == 0) {
         while (in_isr_count > 1);
         out_isr_count = 0;
@@ -90,22 +91,36 @@ _DEFINE_FREERTOS_INTERRUPT_CALLBACK(freertos_isr, freertos_xcore_thread_isr, dat
 #endif
 }
 
-void freertos_xcore_thread_interrupt(int core_id)
+static void _hwtimer_get_trigger_time(hwtimer_t t, uint32_t *time)
 {
-    int this_core_id;
+  asm volatile("getd %0, res[%1]" : "=r" (*time): "r" (t));
+}
 
-    interrupt_mask_all();
-    /*** BEGIN CRITICAL SECTION ***/
-    /*
-     * It is important that this runs atomically
-     * and is not preempted in the middle.
-     */
-    this_core_id = (int) get_logical_core_id();
-    chanend_set_dest(core_interrupt_chan[this_core_id], core_interrupt_chan[core_id]);
-    _s_chan_out_byte(core_interrupt_chan[this_core_id], this_core_id);
-    _s_chan_out_ct_end(core_interrupt_chan[this_core_id]);
-    /*** END CRITICAL SECTION ***/
-    interrupt_unmask_all();
+static xcore_c_error_t hwtimer_get_trigger_time(hwtimer_t t, uint32_t *time)
+{
+  RETURN_EXCEPTION_OR_ERROR( _hwtimer_get_trigger_time(t, time) );
+}
+
+_DEFINE_FREERTOS_INTERRUPT_CALLBACK(freertos_isr, freertos_xcore_timer_isr, data, sp)
+{
+    uint32_t now;
+
+    hwtimer_get_time(freertos_kernel_timer, &now);
+    hwtimer_get_trigger_time(freertos_kernel_timer, &now);
+    //debug_printf("timer isr (%u)\n", now);
+    now += 10 * 100000;
+    hwtimer_change_trigger_time(freertos_kernel_timer, now);
+
+    freertos_tick++;
+
+    if (freertos_tick % 100 == 0) {
+        debug_printf("%d\n", freertos_tick);
+        for (int i = 0; i < 3; i++) {
+            freertos_xcore_thread_interrupt_from_isr(i);
+        }
+    }
+
+    return sp;
 }
 
 /*
@@ -133,6 +148,7 @@ int freertos_xcore_thread_init(int xcore_thread_count)
 
     if (core_id == 0) {
         lock_alloc(&freertos_kernel_lock);
+        hwtimer_alloc(&freertos_kernel_timer);
     } else {
         /*
          * xcore threads other than 0 must wait here until
@@ -157,7 +173,30 @@ int freertos_xcore_thread_init(int xcore_thread_count)
      */
     while (xcore_thread_init_count < xcore_thread_count);
 
+    if (core_id == 0) {
+        uint32_t now;
+        hwtimer_get_time(freertos_kernel_timer, &now);
+        //debug_printf("The time is now (%u)\n", now);
+
+        now += 10 * 100000;
+
+        hwtimer_setup_interrupt_callback(freertos_kernel_timer,
+                now, NULL, INTERRUPT_CALLBACK(freertos_xcore_timer_isr));
+        hwtimer_enable_trigger(freertos_kernel_timer);
+
+    }
+
     return core_id;
+}
+
+void pcore(int thread_id)
+{
+    int core_id;
+
+    interrupt_mask_all();
+    core_id = get_logical_core_id();
+    debug_printf("Thread %d on core %d\n", thread_id, core_id);
+    interrupt_unmask_all();
 }
 
 _DEFINE_FREERTOS_INTERRUPT_PERMITTED(freertos_isr, void, freertos_xcore_thread_kernel_enter, int xcore_thread_count)
@@ -172,27 +211,11 @@ _DEFINE_FREERTOS_INTERRUPT_PERMITTED(freertos_isr, void, freertos_xcore_thread_k
 
     for (int i = 0; i < 10; i++) {
 
-        int core_id;
-        int core_to_interrupt;
+        pcore(thread_id);
 
-        interrupt_mask_all();
-        core_id = get_logical_core_id();
-        core_to_interrupt = core_id + 1;
-        if (core_to_interrupt == xcore_thread_count) {
-            core_to_interrupt = 0;
-        }
-
-        if (core_to_interrupt == 0) {
-
-            debug_printf("Thread %d on core %d interrupting core %d\n", thread_id, core_id, core_to_interrupt);
-
-
-            freertos_xcore_thread_interrupt(core_to_interrupt);
-            interrupt_unmask_all();
-        } else {
-            debug_printf("Thread %d on core %d\n", thread_id, core_id);
-            interrupt_unmask_all();
-        }
+        /* delay 500 ms (50 ticks) */
+        uint32_t t1 = freertos_tick;
+        while ((freertos_tick - t1) < 50);
     }
 
     interrupt_mask_all();
