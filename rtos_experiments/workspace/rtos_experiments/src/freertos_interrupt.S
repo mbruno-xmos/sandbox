@@ -8,18 +8,45 @@
 
 #include "freertos_port.h"
 
+.globl kexcept
+.align 128              /* align the kernel section to 128 bytes */
+kexcept:
+  bu kexcept
+
+.align 64
+kcall:
+  /* start saving the thread's context */
+  extsp _XCORE_C_STACK_ALIGN(FREERTOS_XCORE_THREAD_CONTEXT_WORDSIZE)
+  stw    r11,    sp[19]
+  stw    r2,     sp[10]
+
+  /* kcall sets SPC to the instruction of the kcall rather than the next instruction */
+  /* so we need to adjust the SPC value that we save to the stack: */
+  stw    spc,    sp[1]   /* save the saved program counter onto the stack... */
+  ldw    r2,     sp[1]   /* so that we can load it into r2. */
+  add    r2, r2, 2       /* Add 2 to the spc to make it point to the instruction after the kcall */
+  stw    r2,     sp[1]   /* Now save it to the stack */
+
+  /* KCALLs use the same common function as interrupt callbacks. */
+  /* we want it to call freertos_kcall_handler as the root function. */
+  ldap   r11,    freertos_kcall_handler
+  mov    r2,     r11
+
+  /* jump into _freertos_interrupt_callback_common but just past */
+  /* the instruction that saves the SPC since it was saved above */
+  bu _freertos_kcall_save_ctx_continue
+
 .globl _freertos_interrupt_callback_common
 .align 2  // We arrive in single issue mode.
 .type  _freertos_interrupt_callback_common,@function
 _freertos_interrupt_callback_common:
-  // This is the body of the FreeRTOS _xcore_c_interrupt_callback_XXX functions.
-  // r2 = interrupt_callback_t function
+  /* This is the body of the FreeRTOS _xcore_c_interrupt_callback_XXX functions. */
+  /* r2 = interrupt_callback_t function */
 
-  /*
-   * Save the thread's context onto the thread's stack.
-   * The stack was extended for this by the wrapper function.
-   */
+  /* Save the thread's context onto the thread's stack. */
+  /* The stack was extended for this by the wrapper function. */
   stw    spc,    sp[1]
+_freertos_kcall_save_ctx_continue:
   stw    ssr,    sp[2]
   stw    sed,    sp[3]
   stw    et,     sp[4]
@@ -82,3 +109,5 @@ _freertos_interrupt_callback_common:
   ldaw   sp,     sp[_XCORE_C_STACK_ALIGN(FREERTOS_XCORE_THREAD_CONTEXT_WORDSIZE)]
 
   kret                   /* exit kernel mode and return to the thread */
+
+

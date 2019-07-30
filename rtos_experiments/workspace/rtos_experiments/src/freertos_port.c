@@ -64,8 +64,8 @@ _DEFINE_FREERTOS_INTERRUPT_CALLBACK(freertos_isr, freertos_xcore_thread_isr, dat
     in_isr_count++;
     lock_release(freertos_kernel_lock);
 
-    other_core_id = (int) _s_chan_in_byte(core_interrupt_chan[core_id]);
-    _s_chan_check_ct_end(core_interrupt_chan[core_id]);
+    //other_core_id = (int) _s_chan_in_byte(core_interrupt_chan[core_id]);
+    //_s_chan_check_ct_end(core_interrupt_chan[core_id]);
 
     next_core_id = core_id + 1;
     if (next_core_id == 3) {
@@ -81,6 +81,14 @@ _DEFINE_FREERTOS_INTERRUPT_CALLBACK(freertos_isr, freertos_xcore_thread_isr, dat
 #else
     return (void *) thread_sp[core_id];
 #endif
+}
+
+__attribute__((fptrgroup("freertos_isr")))
+void *freertos_kcall_handler(uint32_t arg, void *sp)
+{
+    debug_printf("In KCALL: %u\n", arg);
+
+    return freertos_xcore_thread_isr(NULL, sp);
 }
 
 static void _hwtimer_get_trigger_time(hwtimer_t t, uint32_t *time)
@@ -107,9 +115,9 @@ _DEFINE_FREERTOS_INTERRUPT_CALLBACK(freertos_isr, freertos_xcore_timer_isr, data
 
     if (freertos_tick % 100 == 0) {
         debug_printf("%d\n", freertos_tick);
-        in_isr_count = 0;
+        //in_isr_count = 0;
         for (int i = 0; i < 3; i++) {
-            freertos_xcore_thread_interrupt_from_isr(i);
+            //freertos_xcore_thread_interrupt_from_isr(i);
         }
     }
 
@@ -151,6 +159,14 @@ int freertos_xcore_thread_init(int xcore_thread_count)
         while (xcore_thread_init_count == 0);
     }
 
+    asm volatile (
+            "ldap r11, kexcept\n\t"
+            "set kep, r11\n\t"
+            :
+            :
+            : "r11"
+    );
+
     chanend_alloc(&core_interrupt_chan[core_id]);
 
     chanend_setup_interrupt_callback(core_interrupt_chan[core_id], NULL, INTERRUPT_CALLBACK(freertos_xcore_thread_isr));
@@ -176,11 +192,12 @@ int freertos_xcore_thread_init(int xcore_thread_count)
         hwtimer_setup_interrupt_callback(freertos_kernel_timer,
                 now, NULL, INTERRUPT_CALLBACK(freertos_xcore_timer_isr));
         hwtimer_enable_trigger(freertos_kernel_timer);
-
     }
 
     return core_id;
 }
+
+#define portKCALL(X) asm volatile ("kcall %0" :: "r"(X))
 
 void pcore(int thread_id)
 {
@@ -204,11 +221,14 @@ _DEFINE_FREERTOS_INTERRUPT_PERMITTED(freertos_isr, void, freertos_xcore_thread_k
 
     for (int i = 0; i < 10; i++) {
 
+        in_isr_count = 0;
+
         pcore(thread_id);
 
         /* delay 500 ms (50 ticks) */
         uint32_t t1 = freertos_tick;
         while ((freertos_tick - t1) < 50);
+        portKCALL(thread_id);
     }
 
     debug_printf("Thread %d done at core %d\n", thread_id, get_logical_core_id());
